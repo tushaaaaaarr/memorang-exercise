@@ -1,76 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server';
+import pdfParse from 'pdf-parse';
 import { prisma } from '@/lib/prisma';
 import { generateLessonPlan } from '@/lib/mcq-generator';
 
 export const runtime = 'nodejs';
 
-// Robust PDF text extraction using regex patterns
 async function extractTextFromPDF(buffer: Buffer): Promise<string> {
   try {
-    const content = buffer.toString('binary');
-    let extractedText = '';
+    const data = await pdfParse(buffer);
+    const text = data.text.replace(/\s+/g, ' ').trim();
 
-    // Method 1: Extract text from PDF text objects (Tj/TJ commands)
-    // PDF text can be in format: (text) Tj or [(text) spacing (text)] TJ
-    const textObjectRegex = /\(([^)\\]*(?:\\.[^)\\]*)*)\)/g;
-    const matches = content.match(textObjectRegex) || [];
-
-    matches.forEach((match) => {
-      let text = match.slice(1, -1); // Remove parentheses
-
-      // Decode PDF escape sequences
-      text = text
-        .replace(/\\n/g, ' ')
-        .replace(/\\r/g, ' ')
-        .replace(/\\t/g, ' ')
-        .replace(/\\\(/g, '(')
-        .replace(/\\\)/g, ')')
-        .replace(/\\\\/g, '\\');
-
-      // Remove control characters but keep printable ASCII
-      text = text.replace(/[\x00-\x1F\x7F]/g, ' ');
-
-      if (text.length > 1) {
-        extractedText += text + ' ';
-      }
-    });
-
-    // Method 2: If not enough text extracted, try to find readable ASCII sequences
-    if (extractedText.trim().length < 100) {
-      const asciiRegex = /[\x20-\x7E]{4,}/g;
-      const asciiMatches = content.match(asciiRegex) || [];
-      
-      // Filter out PDF technical terms
-      const technicalTerms = [
-        'stream',
-        'endstream',
-        'FlateDecode',
-        'ASCII85Decode',
-        'null',
-        'obj',
-        'endobj',
-        'trailer',
-        'xref',
-      ];
-
-      asciiMatches.forEach((match) => {
-        if (
-          !technicalTerms.some((term) => match.toLowerCase().includes(term.toLowerCase())) &&
-          match.length > 3
-        ) {
-          extractedText += match + ' ';
-        }
-      });
-    }
-
-    // Clean up: remove extra whitespace and limit
-    extractedText = extractedText.replace(/\s+/g, ' ').trim();
-
-    if (!extractedText || extractedText.length < 50) {
+    if (!text || text.length < 50) {
       throw new Error('Could not extract sufficient text from PDF');
     }
 
-    return extractedText.slice(0, 8000);
+    return text.slice(0, 8000);
   } catch (error) {
     console.error('PDF extraction error:', error);
     throw new Error('Failed to extract text from PDF');
