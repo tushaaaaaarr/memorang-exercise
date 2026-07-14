@@ -2,6 +2,8 @@
 
 import { useMemo, useState } from 'react';
 import { CheckCircle2, Circle, FileText, Sparkles, Trophy, AlertCircle, Loader } from 'lucide-react';
+import { useCopilotReadable } from '@copilotkit/react-core';
+import { CopilotPopup } from '@copilotkit/react-ui';
 
 interface LessonPlan {
   objectives: string[];
@@ -54,6 +56,22 @@ export default function Home() {
     if (!questions.length) return 0;
     return ((activeIndex + 1) / questions.length) * 100;
   }, [activeIndex, questions.length]);
+
+  const questionsPerObj = plan?.objectives.length
+    ? Math.ceil(questions.length / plan.objectives.length)
+    : 3;
+
+  useCopilotReadable({
+    description: 'Current lesson and quiz context for the AI tutor',
+    value: {
+      lessonDifficulty: plan?.difficulty ?? null,
+      currentObjective: plan?.objectives[Math.floor(activeIndex / questionsPerObj)] ?? null,
+      allObjectives: plan?.objectives ?? [],
+      currentQuestion: currentQuestion?.prompt ?? null,
+      questionOptions: currentQuestion?.options ?? null,
+      quizPhase: completed ? 'completed' : approved ? 'quiz' : plan ? 'review' : 'upload',
+    },
+  });
 
   async function handleUpload(event: React.ChangeEvent<HTMLInputElement>) {
     const uploaded = event.target.files?.[0];
@@ -282,6 +300,41 @@ export default function Home() {
                 </button>
               </div>
             )}
+
+            {plan && approved && (
+              <div className="mt-6 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <div className="flex items-center gap-2 mb-3">
+                  <CheckCircle2 className="h-5 w-5 text-emerald-600" />
+                  <h2 className="font-semibold">Learning Objectives</h2>
+                </div>
+                <p className="text-xs text-slate-500 mb-3">Difficulty: {plan.difficulty}</p>
+                <ul className="space-y-2 text-sm">
+                  {plan.objectives.map((objective, i) => {
+                    const isCompleted = completed || activeIndex >= (i + 1) * questionsPerObj;
+                    const isCurrent = !completed && Math.floor(activeIndex / questionsPerObj) === i;
+                    return (
+                      <li
+                        key={i}
+                        className={`flex items-start gap-2 transition-colors ${
+                          isCompleted
+                            ? 'text-emerald-600'
+                            : isCurrent
+                            ? 'text-indigo-700 font-medium'
+                            : 'text-slate-400'
+                        }`}
+                      >
+                        {isCompleted ? (
+                          <CheckCircle2 className="mt-0.5 h-4 w-4 flex-shrink-0" />
+                        ) : (
+                          <Circle className={`mt-0.5 h-4 w-4 flex-shrink-0 ${isCurrent ? 'text-indigo-500' : ''}`} />
+                        )}
+                        <span>{i + 1}. {objective}</span>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
+            )}
           </div>
 
           <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-lg">
@@ -410,6 +463,16 @@ export default function Home() {
           </div>
         </section>
       </div>
+      {sessionId && (
+        <CopilotPopup
+
+          labels={{
+            title: 'AI Tutor',
+            initial: "Hi! I'm your AI tutor \uD83D\uDC4B Ask me anything about the lesson, or for a hint on the current question!",
+            placeholder: 'Ask for a hint or explanation...',
+          }}
+        />
+      )}
     </main>
   );
 }

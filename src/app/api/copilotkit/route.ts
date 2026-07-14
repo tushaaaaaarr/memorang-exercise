@@ -1,67 +1,84 @@
-import { NextRequest, NextResponse } from 'next/server';
+import {
+  CopilotRuntime,
+  GroqAdapter,
+  copilotRuntimeNextJSAppRouterEndpoint,
+} from '@copilotkit/runtime';
+import { AbstractAgent, EventType, RunAgentInput, BaseEvent } from '@ag-ui/client';
+import { Observable } from 'rxjs';
+import { ChatGroq } from '@langchain/groq';
+import { SystemMessage, HumanMessage, AIMessage } from '@langchain/core/messages';
+import { NextRequest } from 'next/server';
+import { v4 as uuid } from 'uuid';
 
 export const runtime = 'nodejs';
 
-/**
- * CopilotKit endpoint for AI-powered sidebar assistant
- * Proxies requests to Groq API
- */
-export async function POST(request: NextRequest) {
-  try {
-    const body = await request.json();
-    const apiKey = process.env.GROQ_API_KEY;
+const TUTOR_SYSTEM_PROMPT = `You are an encouraging AI tutor for Memorang AI.
+- Help the student understand lesson material
+- Provide hints that guide thinking WITHOUT revealing answers directly
+- If asked for the direct answer, say "I can't give that away, but here's a hint: ..."
+- Reference the current objective and question when relevant
+- Keep responses brief and supportive
+- When the quiz is complete, celebrate the student's achievement`;
 
-    if (!apiKey) {
-      return NextResponse.json(
-        { error: 'GROQ_API_KEY not configured' },
-        { status: 500 }
-      );
-    }
+const groqModel = new ChatGroq({
+  model: process.env.GROQ_MODEL || 'llama-3.3-70b-versatile',
+  apiKey: process.env.GROQ_API_KEY,
+  streaming: true,
+});
 
-    // Proxy to Groq API with system instruction for learning assistance
-    const groqResponse = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model: process.env.GROQ_MODEL || 'llama-3.3-70b-versatile',
-        temperature: body.temperature || 0.7,
-        max_tokens: body.max_tokens || 1000,
-        messages: [
-          {
-            role: 'system',
-            content: `You are a helpful AI tutor for the Memorang learning platform. Your role is to:
-- Answer questions about the lesson material
-- Provide hints for questions WITHOUT giving away answers
-- Explain concepts in an encouraging way
-- Suggest study strategies
-- Help users understand why answers are correct or incorrect
+// Minimal in-process AG-UI agent backed by LangChain + Groq
+class TutorAgent extends AbstractAgent {
+  run(input: RunAgentInput): Observable<BaseEvent> {
+    return new Observable((subscriber) => {
+      const msgId = uuid();
+      const runId = uuid();
+      (async () => {
+        try {
+          subscriber.next({ type: EventType.RUN_STARTED, threadId: this.threadId, runId });
+          subscriber.next({ type: EventType.TEXT_MESSAGE_START, messageId: msgId, role: 'assistant' });
 
-Always be supportive and guide users toward learning, not just giving answers.`,
-          },
-          ...body.messages,
-        ],
-      }),
+          const langchainMessages = [
+            new SystemMessage(TUTOR_SYSTEM_PROMPT),
+            ...(input.messages ?? []).map((m) =>
+              m.role === 'user'
+                ? new HumanMessage(m.content ?? '')
+                : new AIMessage(m.content ?? '')
+            ),
+          ];
+
+          const stream = await groqModel.stream(langchainMessages);
+          for await (const chunk of stream) {
+            const text = typeof chunk.content === 'string' ? chunk.content : '';
+            if (text) {
+              subscriber.next({ type: EventType.TEXT_MESSAGE_CONTENT, messageId: msgId, delta: text });
+            }
+          }
+
+          subscriber.next({ type: EventType.TEXT_MESSAGE_END, messageId: msgId });
+          subscriber.next({ type: EventType.RUN_FINISHED, threadId: this.threadId, runId });
+          subscriber.complete();
+        } catch (err) {
+          subscriber.error(err);
+        }
+      })();
     });
-
-    if (!groqResponse.ok) {
-      const error = await groqResponse.text();
-      console.error('Groq API error:', error);
-      return NextResponse.json(
-        { error: 'Failed to get AI response' },
-        { status: groqResponse.status }
-      );
-    }
-
-    const data = await groqResponse.json();
-    return NextResponse.json(data);
-  } catch (error) {
-    console.error('CopilotKit endpoint error:', error);
-    return NextResponse.json(
-      { error: 'Internal server error' },
-      { status: 500 }
-    );
   }
 }
+
+const copilotRuntime = new CopilotRuntime({
+  agents: {
+    default: new TutorAgent({ description: 'AI Tutor for Memorang lessons' }),
+  },
+});
+
+export async function POST(req: NextRequest) {
+  const { handleRequest } = copilotRuntimeNextJSAppRouterEndpoint({
+    runtime: copilotRuntime,
+    serviceAdapter: new GroqAdapter({
+      model: process.env.GROQ_MODEL || 'llama-3.3-70b-versatile',
+    }),
+    endpoint: '/api/copilotkit',
+  });
+  return handleRequest(req);
+}
+
